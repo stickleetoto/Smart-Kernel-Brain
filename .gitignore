@@ -1,0 +1,13 @@
+/target/
+/dist/
+*.tmp
+*.log
+.env
+.env.*
+index.skb
+state.json
+*.skb
+.DS_Store
+Thumbs.db
+scripts/__pycache__/
+*.pyc

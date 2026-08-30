@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "skb": {
+      "command": "%LOCALAPPDATA%\\Programs\\SmartKernelBrain\\SKB.exe",
+      "args": ["mcp"]
+    }
+  }
+}

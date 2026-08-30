@@ -1,0 +1,29 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Verify frozen core
+        run: python scripts/verify_core_freeze.py
+      - name: Test
+        run: cargo test
+      - name: Build single binary
+        run: cargo build --release --bin skb
+      - name: Smoke version
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then ./target/release/skb.exe --version; else ./target/release/skb --version; fi
