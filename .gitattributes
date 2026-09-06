@@ -1,0 +1,7 @@
+# Keep frozen source hashes stable on every checkout platform.
+*.rs text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
