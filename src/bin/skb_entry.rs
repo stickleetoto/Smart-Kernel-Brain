@@ -28,7 +28,7 @@ fn main() {
         }
         Some("help") | Some("--help") | Some("-h") => {
             legacy::print_legacy_help();
-            println!("\nDISK USAGE EXTENSION:\n  skb largest <root> [limit]              Show the largest files by metadata size only\n\nEXAMPLE:\n  skb largest D:\\ 100");
+            println!("\nDISK USAGE EXTENSION:\n  skb largest <root> [limit] [--json <file>]  Show largest files with live scan progress\n\nEXAMPLES:\n  skb largest D:\\ 100\n  skb largest D:\\ 1000 --json drive.json");
         }
         _ => legacy::dispatch(),
     }
