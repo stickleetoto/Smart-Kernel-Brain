@@ -1,40 +1,106 @@
 # Smart Kernel Brain (SKB) v1
 
-SKB is a high-performance, filename-only file locator written in Rust.
+**High-performance local file discovery for humans and AI agents.**
 
-**Public release name: `SKB v1`.** Rust package metadata uses `1.0.0` internally because Cargo requires a Semantic Versioning-compatible version string; this is not exposed as the product release name.
+SKB is a filename-only file locator written in Rust. It keeps file discovery fast, local, and simple while exposing the same search core through a CLI, resident daemon, and MCP server.
 
-This branch adds a **single-binary Windows shell** around the already validated v1 search core. The search/index/IPC core is frozen; the new work is installation and interface consolidation.
+The public release line is **`SKB v1`**. Cargo metadata uses `1.0.0` internally for Semantic Versioning compatibility.
 
-## One download, one executable
+## Why SKB
 
-The intended Windows user flow is:
+| Capability | What it means |
+|---|---|
+| **Fast local lookup** | The validated search core is optimized for filename lookup and batched resolution. |
+| **One executable** | The same `SKB.exe` installs, searches, runs the daemon, serves MCP, repairs, and uninstalls. |
+| **Agent-ready MCP** | AI agents can discover and resolve local files without needing a separate service binary. |
+| **Resident mode** | A daemon keeps the search path warm for repeated local queries. |
+| **Frozen core** | The validated search/index/IPC core is hash-checked so interface work cannot silently change it. |
+| **User-local install** | Windows installation requires no administrator rights. |
 
-```text
-Download SKB.exe
-      |
-      v
-Double-click once
-      |
-      +--> copies itself to %LOCALAPPDATA%\Programs\SmartKernelBrain\SKB.exe
-      +--> creates %LOCALAPPDATA%\SKB for index/state data
-      +--> adds the install directory to the current-user PATH
-      |
-      v
-New terminal: `skb ...`
+## Quick start
+
+Install by double-clicking `SKB.exe`, or run:
+
+```powershell
+.\SKB.exe install
 ```
 
-The **same `SKB.exe`** is used as:
+Then open a new terminal:
 
-- first-run installer;
-- CLI;
-- resident daemon executable;
-- MCP stdio server (`skb mcp`);
-- repair/status/uninstaller.
+```powershell
+skb --version
+skb scan "D:\Projects"
+skb daemon-start
+skb rfind-id README.md
+```
 
-There is no separate `skb-mcp.exe` and no separate setup executable.
+Optional first scan and daemon start during installation:
 
-## Build the single EXE
+```powershell
+.\SKB.exe install --scan "D:\Projects" --start-daemon
+```
+
+Default locations:
+
+```text
+Program: %LOCALAPPDATA%\Programs\SmartKernelBrain\SKB.exe
+Data:    %LOCALAPPDATA%\SKB
+```
+
+## One binary, multiple roles
+
+```text
+SKB.exe
+  ├─ first-run installer
+  ├─ CLI
+  ├─ resident daemon
+  ├─ MCP stdio server
+  ├─ status / repair
+  └─ uninstaller
+```
+
+There is no separate setup executable and no separate `skb-mcp.exe`.
+
+## Performance
+
+Previous Windows validation used a mixed real-name workload with 553 unique names, 10% misses, and ~0.2% hot-cache hits:
+
+| Batch | Amortized RTT/file | Effective lookups/sec |
+|---:|---:|---:|
+| 1 | 7,823 ns | 127,828 |
+| 100 | 199.9 ns | 5,001,901 |
+| 1000 | 105.8 ns | 9,455,675 |
+| 4096 | 99.6 ns | 10,041,426 |
+
+Batch values are amortized per-file costs, not independent single-file IPC latency. See [BENCHMARKS.md](BENCHMARKS.md) for the benchmark details.
+
+## MCP
+
+Run the MCP server from the same executable:
+
+```powershell
+skb mcp
+```
+
+Generate a ready-to-copy MCP configuration:
+
+```powershell
+skb mcp-config
+```
+
+Available tools:
+
+- `skb_find_id`
+- `skb_find_ids`
+- `skb_find_refs`
+- `skb_resolve_paths`
+- `skb_find`
+- `skb_hot_files`
+- `skb_stats`
+
+The generated descriptor points to the installed executable with `args: ["mcp"]`.
+
+## Build
 
 On Windows with Rust installed:
 
@@ -48,86 +114,18 @@ or:
 powershell -ExecutionPolicy Bypass -File .\build-single-exe.ps1
 ```
 
-The build runs the frozen-core hash check, Rust tests, a release build, and a version smoke check. Output:
+The build performs the frozen-core hash check, Rust tests, a release build, and a version smoke check.
+
+Output:
 
 ```text
 dist\SKB.exe
 dist\SKB.exe.sha256.txt
 ```
 
-## Installation
-
-Double-click an uninstalled copy of `SKB.exe`, or run:
-
-```powershell
-.\SKB.exe install
-```
-
-Optional first scan and daemon start:
-
-```powershell
-.\SKB.exe install --scan "D:\Projects" --start-daemon
-```
-
-Default locations:
-
-```text
-Program: %LOCALAPPDATA%\Programs\SmartKernelBrain\SKB.exe
-Data:    %LOCALAPPDATA%\SKB
-```
-
-No administrator rights are required.
-
-After installation, open a new terminal:
-
-```powershell
-skb --version
-skb status
-skb scan "D:\Projects"
-skb daemon-start
-skb rfind-id README.md
-```
-
-## MCP
-
-The MCP server is now a mode of the same executable:
-
-```powershell
-skb mcp
-```
-
-Print a ready-to-copy MCP configuration:
-
-```powershell
-skb mcp-config
-```
-
-It points to the installed executable with `args: ["mcp"]`.
-
-Existing MCP tools remain:
-
-- `skb_find_id`
-- `skb_find_ids`
-- `skb_find_refs`
-- `skb_resolve_paths`
-- `skb_find`
-- `skb_hot_files`
-- `skb_stats`
-
-## Maintenance commands
-
-```powershell
-skb repair
-skb status
-skb uninstall
-skb uninstall --purge-data
-```
-
-Normal uninstall preserves `%LOCALAPPDATA%\SKB`. `--purge-data` removes the index/state directory too.
-
 ## Core freeze
 
-The following files are byte-for-byte frozen from the validated core used before this installer work:
+The validated search core is byte-for-byte frozen in:
 
 ```text
 src/engine.rs
@@ -139,24 +137,22 @@ src/resident.rs
 src/state.rs
 ```
 
-CI checks their SHA-256 hashes before tests/build. See [CORE_FREEZE.md](CORE_FREEZE.md).
+CI checks the SHA-256 hashes of these files before tests and builds. See [CORE_FREEZE.md](CORE_FREEZE.md).
 
-## Previously measured core performance
+## Maintenance
 
-The single-EXE work does not alter the measured lookup path. Previous Windows validation included a mixed real-name workload with 553 unique names, 10% misses, and ~0.2% hot-cache hits:
+```powershell
+skb status
+skb repair
+skb uninstall
+skb uninstall --purge-data
+```
 
-| Batch | Amortized RTT/file | Effective lookups/sec |
-|---:|---:|---:|
-| 1 | 7,823 ns | 127,828 |
-| 100 | 199.9 ns | 5,001,901 |
-| 1000 | 105.8 ns | 9,455,675 |
-| 4096 | 99.6 ns | 10,041,426 |
-
-Batch values are amortized per-file costs, not independent single-file IPC latency. See [BENCHMARKS.md](BENCHMARKS.md).
+Normal uninstall preserves `%LOCALAPPDATA%\SKB`. `--purge-data` removes the index and state data as well.
 
 ## v1 status
 
-`SKB v1` is the single-EXE release line. The search core remains frozen; Windows first-run install, PATH registration, MCP launch, daemon launch, repair, and self-uninstall should be validated on the release build before publishing.
+`SKB v1` is the single-EXE release line. The search core remains frozen while Windows installation, PATH registration, daemon launch, MCP launch, repair, and self-uninstall are validated around it.
 
 ## License
 
