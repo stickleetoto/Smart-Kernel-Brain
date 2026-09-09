@@ -113,7 +113,9 @@ pub fn preflight_index(path: &Path) -> io::Result<()> {
 
     let version = read_u32(&mut file)?;
     if version != INDEX_VERSION {
-        return Err(invalid_data(format!("unsupported SKB index version {version}")));
+        return Err(invalid_data(format!(
+            "unsupported SKB index version {version}"
+        )));
     }
 
     let root_len = read_u32(&mut file)? as u64;
