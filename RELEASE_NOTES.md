@@ -1,39 +1,42 @@
-# Smart Kernel Brain v1 — First Public Release
+# Smart Kernel Brain v1.1.0 — Hardened Persistence Release
 
-SKB is a compact, adaptive, filename-only file locator written in Rust.
+SKB v1.1.0 hardens index persistence and loading while keeping the validated search/hash/index lookup hot path byte-for-byte frozen.
 
 ## Highlights
 
-- Exact filename lookup without indexing file contents
-- ~38.3 B/file compact payload lower bound at 1M synthetic entries
-- Allocation-free LeanRef lookup path
-- Resident Windows core using Named Pipe + binary IPC
-- Batch lookup of up to 4096 filenames/request
-- MCP tools for filename lookup and path resolution
-- Mixed real-name benchmark mode with configurable misses
+- staged same-directory index writes before activation
+- explicit file sync before replacing the active index
+- Windows replacement path with rollback-safe fallback
+- compact-index preflight before the allocating loader runs
+- rejection of truncated, trailing, overflowed, or structurally impossible index files
+- pinned Rust 1.98.1 toolchain and direct serde dependency versions
+- expanded CI with frozen-core verification, hardening rustfmt, Clippy, tests, release build, and version smoke
 
-## Recorded validation highlights
+## Packaging
 
-On the initial Windows test machine:
+Release assets are built from the release commit by GitHub Actions:
 
-- persistent single resident lookup: ~7.77 us/request
-- mixed real-name workload, 10% misses, batch 100: ~199.9 ns/file amortized
-- mixed real-name workload, 10% misses, batch 1000: ~105.8 ns/file amortized
-- mixed real-name workload, 10% misses, batch 4096: ~99.6 ns/file amortized, ~10.04M effective lookups/sec
-- repeated-hot batch 1000 best-case: ~44.5 ns/file amortized, ~22.46M effective lookups/sec
+- `skb-v1.1.0-windows-x86_64.zip`
+- `skb-v1.1.0-linux-x86_64.tar.gz`
+- `SHA256SUMS.txt`
 
-Batch numbers are amortized per-file costs and are not independent single-file IPC latency.
+Each platform package includes the SKB executable/binary, `README.md`, `LICENSE`, and these release notes.
 
-## Release boundary
+## Validation
 
-The search/index core is frozen from the validated v0.7.1 line. v1 public-release work is repository packaging, documentation, release metadata, CI, and version/endpoint metadata only.
+The v1.1 hardening PR and the resulting `main` commit both passed the Windows and Ubuntu CI matrix: frozen-core verification, hardening-layer formatting, Clippy, tests, release build, and `--version` smoke.
+
+## Compatibility boundary
+
+The compact index remains version 2 and the existing search lookup contract is unchanged. This release does not introduce generation-aware file references or cross-process adaptive-state merge semantics.
 
 ## Known limitations
 
-- No file-content search
-- No file edit/delete operations
-- No live watcher yet
+- no file-content search
+- no file edit/delete operations
+- no live watcher yet
 - `file_id` is not generation-aware yet
-- Duplicate filename path-specific ranking is not claimed
+- cross-process adaptive state still needs a dedicated merge/locking design
+- duplicate filename path-specific ranking is not claimed
 
-See `README.md`, `BENCHMARKS.md`, and `CORE_FREEZE.md` for details.
+See `README.md`, `BENCHMARKS.md`, `CORE_FREEZE.md`, and `CHANGELOG.md` for details.
