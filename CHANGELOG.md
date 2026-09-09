@@ -1,22 +1,29 @@
 # Changelog
 
-## v1.1 — Hardening candidate
+## v1.1.0 — 2026-09-10
 
 ### Reliability
 
 - route `skb scan` through same-directory temporary persistence
 - flush and sync the completed temporary index before activation
-- use replace-existing + write-through semantics on Windows and atomic rename semantics on Unix-like systems
+- use replace-existing semantics on Windows and atomic rename semantics on Unix-like systems
+- use a rollback-safe fallback when Windows replacement cannot activate the staged index directly
 - preflight compact index headers and exact on-disk length before commands enter the allocating loader
 - reject truncated, trailing, overflowed, or structurally impossible index files with a rebuild hint
 
 ### Build validation
 
 - pin the validated Rust 1.98.1 toolchain
-- pin direct `serde` / `serde_json` dependency versions used by the latest successful CI
+- pin direct `serde` / `serde_json` dependency versions used by the successful CI run
 - run rustfmt validation on the new hardening layer without rewriting the frozen core
 - run Clippy across all targets as an additional lint/build check
 - add regression tests for valid preflight, truncated-index rejection, and replacement of an existing index
+
+### Packaging
+
+- publish Windows x86_64 and Linux x86_64 release packages
+- include README, license, and release notes with each package
+- publish SHA-256 checksums alongside release assets
 
 The validated search/hash/index lookup hot path remains byte-for-byte frozen. This hardening layer is implemented around the existing core.
 
