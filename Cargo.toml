@@ -1,6 +1,6 @@
 [package]
 name = "smart-kernel-brain"
-version = "1.0.0"
+version = "1.1.0"
 autobins = false
 edition = "2021"
 description = "Adaptive filename-only file locator with hot-cache weighting and MCP support"

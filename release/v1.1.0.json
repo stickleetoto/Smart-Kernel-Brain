@@ -1,0 +1,13 @@
+{
+  "version": "1.1.0",
+  "tag": "v1.1.0",
+  "release_name": "Smart Kernel Brain v1.1.0",
+  "rust": "1.98.1",
+  "index_format": 2,
+  "assets": [
+    "skb-v1.1.0-windows-x86_64.zip",
+    "skb-v1.1.0-linux-x86_64.tar.gz",
+    "SHA256SUMS.txt"
+  ],
+  "core_policy": "validated lookup core remains byte-for-byte frozen"
+}
