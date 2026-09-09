@@ -195,14 +195,24 @@ fn temporary_sibling(destination: &Path) -> PathBuf {
 
 #[cfg(windows)]
 fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
 
-    const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
-    const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
+    if !destination.exists() {
+        return fs::rename(source, destination);
+    }
 
     #[link(name = "kernel32")]
     extern "system" {
-        fn MoveFileExW(existing: *const u16, new_name: *const u16, flags: u32) -> i32;
+        fn ReplaceFileW(
+            replaced_file_name: *const u16,
+            replacement_file_name: *const u16,
+            backup_file_name: *const u16,
+            replace_flags: u32,
+            exclude: *mut c_void,
+            reserved: *mut c_void,
+        ) -> i32;
     }
 
     let source_wide: Vec<u16> = source
@@ -216,17 +226,53 @@ fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
         .chain(std::iter::once(0))
         .collect();
 
-    let ok = unsafe {
-        MoveFileExW(
-            source_wide.as_ptr(),
+    let replaced = unsafe {
+        ReplaceFileW(
             destination_wide.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            source_wide.as_ptr(),
+            ptr::null(),
+            0,
+            ptr::null_mut(),
+            ptr::null_mut(),
         )
     };
-    if ok != 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
+    if replaced != 0 {
+        return Ok(());
+    }
+
+    let primary_error = io::Error::last_os_error();
+    replace_file_with_rollback(source, destination).map_err(|fallback_error| {
+        io::Error::new(
+            fallback_error.kind(),
+            format!(
+                "ReplaceFileW failed ({primary_error}); rollback-safe fallback failed: {fallback_error}"
+            ),
+        )
+    })
+}
+
+#[cfg(windows)]
+fn replace_file_with_rollback(source: &Path, destination: &Path) -> io::Result<()> {
+    let backup = temporary_sibling(destination).with_extension("skb-backup");
+    fs::rename(destination, &backup)?;
+
+    match fs::rename(source, destination) {
+        Ok(()) => {
+            let _ = fs::remove_file(backup);
+            Ok(())
+        }
+        Err(activate_error) => {
+            if let Err(restore_error) = fs::rename(&backup, destination) {
+                return Err(io::Error::new(
+                    restore_error.kind(),
+                    format!(
+                        "failed to activate new index ({activate_error}) and failed to restore old index ({restore_error}); backup remains at {}",
+                        backup.display()
+                    ),
+                ));
+            }
+            Err(activate_error)
+        }
     }
 }
 
