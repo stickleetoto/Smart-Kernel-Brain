@@ -194,7 +194,6 @@ fn temporary_sibling(destination: &Path) -> PathBuf {
 #[cfg(windows)]
 fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use std::ptr;
 
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
     const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
@@ -225,7 +224,6 @@ fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
     if ok != 0 {
         Ok(())
     } else {
-        let _ = ptr::null::<u8>();
         Err(io::Error::last_os_error())
     }
 }
