@@ -1,8 +1,9 @@
 mod disk_usage;
+mod hardening;
 
 // Keep the validated v1 CLI source byte-for-byte unchanged. The legacy CLI is
-// compiled as a nested module and receives every command except the disk-usage
-// extension below.
+// compiled as a nested module and receives commands that do not require a
+// hardening wrapper below.
 mod legacy {
     include!("skb.rs");
 
@@ -26,10 +27,23 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("scan") => {
+            if let Err(e) = hardening::run_scan(&args[2..]) {
+                eprintln!("skb: {e}");
+                std::process::exit(1);
+            }
+        }
         Some("help") | Some("--help") | Some("-h") => {
             legacy::print_legacy_help();
             println!("\nDISK USAGE EXTENSION:\n  skb largest <root> [limit] [--json <file>]  Show largest files with live scan progress\n\nEXAMPLES:\n  skb largest D:\\ 100\n  skb largest D:\\ 1000 --json drive.json");
         }
-        _ => legacy::dispatch(),
+        Some(command) => {
+            if let Err(e) = hardening::preflight_default_index_for(command) {
+                eprintln!("skb: {e}");
+                std::process::exit(1);
+            }
+            legacy::dispatch();
+        }
+        None => legacy::dispatch(),
     }
 }
