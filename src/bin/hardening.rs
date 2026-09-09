@@ -89,7 +89,10 @@ fn save_index_atomic(index: &FileIndex, destination: &Path) -> io::Result<()> {
     let temporary = temporary_sibling(destination);
     let result = (|| {
         index.save(&temporary)?;
-        File::open(&temporary)?.sync_all()?;
+        {
+            let synced = File::open(&temporary)?;
+            synced.sync_all()?;
+        }
         replace_file(&temporary, destination)?;
         sync_parent_best_effort(destination);
         Ok(())
