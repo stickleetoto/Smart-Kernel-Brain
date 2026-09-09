@@ -1,0 +1,144 @@
+name: Release v1.1.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - release/v1.1.0.json
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_VERSION: "1.1.0"
+  RELEASE_TAG: "v1.1.0"
+
+jobs:
+  build:
+    name: package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Verify frozen core
+        run: python scripts/verify_core_freeze.py
+
+      - name: Test release build
+        run: cargo test --release
+
+      - name: Build SKB
+        run: cargo build --release --bin skb
+
+      - name: Package Windows x86_64
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $package = "skb-v$env:RELEASE_VERSION-windows-x86_64"
+          $folder = Join-Path "dist" $package
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          Copy-Item "target/release/skb.exe" "$folder/skb.exe"
+          Copy-Item "README.md" "$folder/README.md"
+          Copy-Item "LICENSE" "$folder/LICENSE"
+          Copy-Item "RELEASE_NOTES.md" "$folder/RELEASE_NOTES.md"
+          Copy-Item "Cargo.lock" "$folder/Cargo.lock"
+          Compress-Archive -Path $folder -DestinationPath "dist/$package.zip" -CompressionLevel Optimal
+          $asset = "dist/$package.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLowerInvariant()
+          "$hash  $package.zip" | Set-Content -Encoding ascii "$asset.sha256"
+
+      - name: Package Linux x86_64
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="skb-v${RELEASE_VERSION}-linux-x86_64"
+          mkdir -p "dist/${package}"
+          cp target/release/skb "dist/${package}/skb"
+          chmod +x "dist/${package}/skb"
+          cp README.md LICENSE RELEASE_NOTES.md Cargo.lock "dist/${package}/"
+          tar -C dist -czf "dist/${package}.tar.gz" "${package}"
+          (cd dist && sha256sum "${package}.tar.gz" > "${package}.tar.gz.sha256")
+
+      - name: Smoke packaged Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: target/release/skb.exe --version
+
+      - name: Smoke packaged Linux binary
+        if: runner.os == 'Linux'
+        shell: bash
+        run: target/release/skb --version
+
+      - name: Upload Windows package
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: skb-v1.1.0-windows-x86_64
+          path: |
+            dist/skb-v1.1.0-windows-x86_64.zip
+            dist/skb-v1.1.0-windows-x86_64.zip.sha256
+          if-no-files-found: error
+
+      - name: Upload Linux package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: skb-v1.1.0-linux-x86_64
+          path: |
+            dist/skb-v1.1.0-linux-x86_64.tar.gz
+            dist/skb-v1.1.0-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Verify release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          for checksum in *.sha256; do
+            sha256sum -c "$checksum"
+          done
+          cat *.sha256 > SHA256SUMS.txt
+
+      - name: Publish v1.1.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "$RELEASE_TAG already exists; refusing to replace an existing release."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" \
+            dist/skb-v1.1.0-windows-x86_64.zip \
+            dist/skb-v1.1.0-linux-x86_64.tar.gz \
+            dist/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" \
+            --title "Smart Kernel Brain v1.1.0" \
+            --notes-file RELEASE_NOTES.md
