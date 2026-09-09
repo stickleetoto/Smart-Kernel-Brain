@@ -14,7 +14,8 @@
 
 - pin the validated Rust 1.98.1 toolchain
 - pin direct `serde` / `serde_json` dependency versions used by the latest successful CI
-- add `cargo fmt --check` and warning-denying Clippy to CI
+- run rustfmt validation on the new hardening layer without rewriting the frozen core
+- run Clippy across all targets as an additional lint/build check
 - add regression tests for valid preflight, truncated-index rejection, and replacement of an existing index
 
 The validated search/hash/index lookup hot path remains byte-for-byte frozen. This hardening layer is implemented around the existing core.
