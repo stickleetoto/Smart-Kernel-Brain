@@ -3,9 +3,12 @@ name = "smart-kernel-brain"
 version = "1.1.0"
 autobins = false
 edition = "2021"
-description = "Adaptive filename-only file locator with hot-cache weighting and MCP support"
+description = "High-performance local filename discovery with CLI, resident daemon, and MCP support"
 license = "MIT"
 repository = "https://github.com/stickleetoto/Smart-Kernel-Brain"
+readme = "README.md"
+keywords = ["file-search", "mcp", "cli", "daemon", "local-search"]
+categories = ["command-line-utilities", "filesystem"]
 
 [lib]
 name = "skb"
