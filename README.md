@@ -4,7 +4,7 @@
 
 SKB is a filename-only file locator written in Rust. It keeps file discovery fast, local, and simple while exposing the same search core through a CLI, resident daemon, and MCP server.
 
-The public release line is **`SKB v1`**. Cargo metadata uses `1.0.0` internally for Semantic Versioning compatibility.
+The public release line is **`SKB v1`**. The current stable Cargo package version is `1.1.0`.
 
 ## Why SKB
 
@@ -92,11 +92,20 @@ Available tools:
 
 - `skb_find_id`
 - `skb_find_ids`
+- `skb_find_paths`
 - `skb_find_refs`
 - `skb_resolve_paths`
 - `skb_find`
 - `skb_hot_files`
 - `skb_stats`
+
+### Agent batching
+
+`skb_find_ids` accepts up to **4096 filenames per MCP call**. Use `compact: true` when the agent only needs file IDs; the result becomes an input-ordered array of `file_id | null` values and the text payload is serialized without pretty-print whitespace.
+
+When paths are definitely required, `skb_find_paths` combines first-hit lookup and path resolution into one MCP tool call. It also accepts up to 4096 filenames and supports `compact: true`, returning `path | null` values in input order.
+
+`skb_resolve_paths` also accepts up to 4096 file IDs, so a large ID batch can be resolved without being split into many MCP calls.
 
 The generated descriptor points to the installed executable with `args: ["mcp"]`.
 
@@ -152,7 +161,7 @@ Normal uninstall preserves `%LOCALAPPDATA%\SKB`. `--purge-data` removes the inde
 
 ## v1 status
 
-`SKB v1` is the single-EXE release line. The search core remains frozen while Windows installation, PATH registration, daemon launch, MCP launch, repair, and self-uninstall are validated around it.
+`SKB v1` is the single-EXE release line. The search core remains frozen while Windows installation, PATH registration, daemon launch, MCP launch, repair, self-uninstall, and agent-facing batching evolve around it.
 
 ## License
 
