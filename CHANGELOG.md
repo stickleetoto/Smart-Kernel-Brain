@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Agent batching extensions
+
+### MCP / agent throughput
+
+- raise `skb_find_ids` from 100 to 4096 filenames per MCP call
+- add `compact: true` mode to `skb_find_ids`, returning input-ordered `file_id | null` values with compact JSON text output
+- add `skb_find_paths` for one-call batch filename-to-path resolution, with the same 4096-item limit and optional compact path-only output
+- raise `skb_resolve_paths` from 100 to 4096 file IDs per MCP call
+- report the MCP server version directly from Cargo package metadata instead of a stale hard-coded `v1` string
+- expose the active MCP batch limit in `skb_stats`
+
+These changes are implemented outside the frozen search/index/resident/state core.
+
 ## v1.1.0 — 2026-09-10
 
 ### Reliability
