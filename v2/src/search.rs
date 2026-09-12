@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use skb::FileIndex;
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
+use std::fs;
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 
 const DEFAULT_LIMIT: usize = 32;
 const MAX_LIMIT: usize = 4096;
@@ -26,6 +28,62 @@ pub enum SearchMatchKind {
     Fuzzy,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct MetadataFilter {
+    pub min_size_bytes: Option<u64>,
+    pub max_size_bytes: Option<u64>,
+    pub modified_after_unix_secs: Option<u64>,
+    pub modified_before_unix_secs: Option<u64>,
+}
+
+impl MetadataFilter {
+    pub fn is_active(&self) -> bool {
+        self.min_size_bytes.is_some()
+            || self.max_size_bytes.is_some()
+            || self.modified_after_unix_secs.is_some()
+            || self.modified_before_unix_secs.is_some()
+    }
+
+    fn matches(&self, metadata: &FileMetadataV2) -> bool {
+        if let Some(minimum) = self.min_size_bytes {
+            if metadata.size_bytes < minimum {
+                return false;
+            }
+        }
+        if let Some(maximum) = self.max_size_bytes {
+            if metadata.size_bytes > maximum {
+                return false;
+            }
+        }
+        if let Some(after) = self.modified_after_unix_secs {
+            if !metadata
+                .modified_unix_secs
+                .map(|modified| modified > after)
+                .unwrap_or(false)
+            {
+                return false;
+            }
+        }
+        if let Some(before) = self.modified_before_unix_secs {
+            if !metadata
+                .modified_unix_secs
+                .map(|modified| modified < before)
+                .unwrap_or(false)
+            {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileMetadataV2 {
+    pub size_bytes: u64,
+    pub modified_unix_secs: Option<u64>,
+    pub readonly: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchQuery {
     pub term: String,
@@ -34,6 +92,10 @@ pub struct SearchQuery {
     pub extensions: Vec<String>,
     pub path_contains: Option<String>,
     pub scope: Option<String>,
+    #[serde(default)]
+    pub metadata: MetadataFilter,
+    #[serde(default)]
+    pub include_metadata: bool,
     #[serde(default = "default_limit")]
     pub limit: usize,
 }
@@ -62,6 +124,8 @@ impl SearchQuery {
             extensions: Vec::new(),
             path_contains: None,
             scope: None,
+            metadata: MetadataFilter::default(),
+            include_metadata: false,
             limit: DEFAULT_LIMIT,
         }
     }
@@ -74,6 +138,7 @@ pub struct SearchHitV2 {
     pub path: String,
     pub score: u16,
     pub match_kind: SearchMatchKind,
+    pub metadata: Option<FileMetadataV2>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +212,8 @@ fn search_index(index: &FileIndex, generation: u64, query: &SearchQuery) -> Sear
             &extension_filters,
             path_filter.as_deref(),
             scope_filter.as_deref(),
+            &query.metadata,
+            query.include_metadata,
         ),
         SearchMode::Fuzzy => search_fuzzy(
             index,
@@ -156,6 +223,8 @@ fn search_index(index: &FileIndex, generation: u64, query: &SearchQuery) -> Sear
             &extension_filters,
             path_filter.as_deref(),
             scope_filter.as_deref(),
+            &query.metadata,
+            query.include_metadata,
         ),
     }
 }
@@ -173,7 +242,14 @@ fn search_exact(
     let mut truncated = false;
 
     for file_id in index.exact_candidates(&query.term) {
-        if !candidate_matches(index, file_id, extension_filters, path_filter, scope_filter) {
+        if !candidate_matches(
+            index,
+            file_id,
+            extension_filters,
+            path_filter,
+            scope_filter,
+            &query.metadata,
+        ) {
             continue;
         }
         if hits.len() == limit {
@@ -186,6 +262,7 @@ fn search_exact(
             file_id,
             1000,
             SearchMatchKind::Exact,
+            query.include_metadata,
         ));
     }
 
@@ -196,6 +273,7 @@ fn search_exact(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn search_prefix(
     index: &FileIndex,
     generation: u64,
@@ -204,6 +282,8 @@ fn search_prefix(
     extension_filters: &[String],
     path_filter: Option<&str>,
     scope_filter: Option<&str>,
+    metadata_filter: &MetadataFilter,
+    include_metadata: bool,
 ) -> SearchResponse {
     let mut ranked = BinaryHeap::with_capacity(limit.saturating_add(1));
     let mut matching = 0usize;
@@ -214,7 +294,14 @@ fn search_prefix(
         if !name_folded.starts_with(term_folded) {
             continue;
         }
-        if !candidate_matches(index, file_id, extension_filters, path_filter, scope_filter) {
+        if !candidate_matches(
+            index,
+            file_id,
+            extension_filters,
+            path_filter,
+            scope_filter,
+            metadata_filter,
+        ) {
             continue;
         }
 
@@ -231,9 +318,16 @@ fn search_prefix(
         );
     }
 
-    finalize_ranked(index, generation, ranked, matching > limit)
+    finalize_ranked(
+        index,
+        generation,
+        ranked,
+        matching > limit,
+        include_metadata,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn search_fuzzy(
     index: &FileIndex,
     generation: u64,
@@ -242,6 +336,8 @@ fn search_fuzzy(
     extension_filters: &[String],
     path_filter: Option<&str>,
     scope_filter: Option<&str>,
+    metadata_filter: &MetadataFilter,
+    include_metadata: bool,
 ) -> SearchResponse {
     let query_normalized = normalize_fuzzy_text(term);
     if query_normalized.is_empty() {
@@ -257,15 +353,21 @@ fn search_fuzzy(
 
     for raw_id in 0..index.entry_count() {
         let file_id = raw_id as u32;
-        if !candidate_matches(index, file_id, extension_filters, path_filter, scope_filter) {
-            continue;
-        }
-
         let Some((score, match_kind)) = fuzzy_score(&query_normalized, index.entry_name(file_id))
         else {
             continue;
         };
         if score < FUZZY_MIN_SCORE {
+            continue;
+        }
+        if !candidate_matches(
+            index,
+            file_id,
+            extension_filters,
+            path_filter,
+            scope_filter,
+            metadata_filter,
+        ) {
             continue;
         }
 
@@ -281,7 +383,13 @@ fn search_fuzzy(
         );
     }
 
-    finalize_ranked(index, generation, ranked, matching > limit)
+    finalize_ranked(
+        index,
+        generation,
+        ranked,
+        matching > limit,
+        include_metadata,
+    )
 }
 
 fn push_ranked(
@@ -300,6 +408,7 @@ fn finalize_ranked(
     generation: u64,
     heap: BinaryHeap<Reverse<RankedCandidate>>,
     truncated: bool,
+    include_metadata: bool,
 ) -> SearchResponse {
     let mut candidates: Vec<RankedCandidate> = heap.into_iter().map(|item| item.0).collect();
     candidates.sort_unstable_by(|left, right| right.cmp(left));
@@ -312,6 +421,7 @@ fn finalize_ranked(
                 candidate.file_id,
                 candidate.score,
                 candidate.match_kind,
+                include_metadata,
             )
         })
         .collect();
@@ -329,13 +439,14 @@ fn candidate_matches(
     extensions: &[String],
     path_contains: Option<&str>,
     scope: Option<&str>,
+    metadata_filter: &MetadataFilter,
 ) -> bool {
     let name = index.entry_name(file_id);
     if !extensions.is_empty() && !matches_extension(name, extensions) {
         return false;
     }
 
-    if path_contains.is_none() && scope.is_none() {
+    if path_contains.is_none() && scope.is_none() && !metadata_filter.is_active() {
         return true;
     }
 
@@ -355,6 +466,15 @@ fn candidate_matches(
         }
     }
 
+    if metadata_filter.is_active() {
+        let Some(metadata) = read_file_metadata(&path) else {
+            return false;
+        };
+        if !metadata_filter.matches(&metadata) {
+            return false;
+        }
+    }
+
     true
 }
 
@@ -364,17 +484,41 @@ fn materialize_hit(
     file_id: u32,
     score: u16,
     match_kind: SearchMatchKind,
+    include_metadata: bool,
 ) -> SearchHitV2 {
+    let path = index.entry_path(file_id);
+    let metadata = if include_metadata {
+        read_file_metadata(&path)
+    } else {
+        None
+    };
+
     SearchHitV2 {
         reference: FileRef {
             generation,
             file_id,
         },
         name: index.entry_name(file_id).to_owned(),
-        path: index.entry_path(file_id),
+        path,
         score,
         match_kind,
+        metadata,
     }
+}
+
+fn read_file_metadata(path: &str) -> Option<FileMetadataV2> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified_unix_secs = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs());
+
+    Some(FileMetadataV2 {
+        size_bytes: metadata.len(),
+        modified_unix_secs,
+        readonly: metadata.permissions().readonly(),
+    })
 }
 
 fn prefix_score(term: &str, name: &str) -> u16 {
@@ -573,6 +717,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -605,6 +750,7 @@ mod tests {
         assert_eq!(response.hits[0].name, "README.md");
         assert_eq!(response.hits[0].score, 1000);
         assert_eq!(response.hits[0].match_kind, SearchMatchKind::Exact);
+        assert!(response.hits[0].metadata.is_none());
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -756,6 +902,44 @@ mod tests {
             .hits
             .windows(2)
             .all(|pair| pair[0].score >= pair[1].score));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn metadata_size_filter_is_opt_in_and_projects_metadata() {
+        let root = temp_root("metadata-size");
+        fs::write(root.join("artifact-small.bin"), vec![0u8; 4]).unwrap();
+        fs::write(root.join("artifact-large.bin"), vec![0u8; 32]).unwrap();
+        let engine = engine_from_root(&root);
+
+        let mut query = SearchQuery::prefix("artifact-");
+        query.metadata.min_size_bytes = Some(16);
+        query.include_metadata = true;
+        let response = engine.search(&query);
+
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(response.hits[0].name, "artifact-large.bin");
+        assert_eq!(response.hits[0].metadata.as_ref().unwrap().size_bytes, 32);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn metadata_future_modified_filter_rejects_existing_file() {
+        let root = temp_root("metadata-time");
+        fs::write(root.join("recent.txt"), b"recent").unwrap();
+        let engine = engine_from_root(&root);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut query = SearchQuery::exact("recent.txt");
+        query.metadata.modified_after_unix_secs = Some(now.saturating_add(3600));
+        let response = engine.search(&query);
+
+        assert!(response.hits.is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
