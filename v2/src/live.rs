@@ -1,6 +1,8 @@
 #[cfg(test)]
 use crate::INITIAL_GENERATION;
-use crate::{GenerationEngine, LeanFileRefV2, ReloadError, ResolveError};
+use crate::{
+    GenerationEngine, LeanFileRefV2, ReloadError, ResolveError, SearchQuery, SearchResponse,
+};
 use serde::{Deserialize, Serialize};
 use skb::state::UsageState;
 use skb::{FileIndex, ResolvedFile};
@@ -57,10 +59,10 @@ impl From<ResolveError> for LiveIndexError {
 
 /// Thread-safe v2 live-index facade.
 ///
-/// Readers take a shared lock only for the short lookup/resolve operation. A disk
-/// rebuild is performed completely outside the write lock. The write lock is held
-/// only while the validated candidate SearchEngine is swapped into place and the
-/// generation is advanced.
+/// Readers take a shared lock only for the short lookup/resolve/search operation.
+/// A disk rebuild is performed completely outside the write lock. The write lock
+/// is held only while the validated candidate SearchEngine is swapped into place
+/// and the generation is advanced.
 #[derive(Clone)]
 pub struct SharedGenerationEngine {
     inner: Arc<RwLock<GenerationEngine>>,
@@ -99,6 +101,14 @@ impl SharedGenerationEngine {
             .read()
             .map_err(|_| LiveIndexError::LockPoisoned)?;
         Ok(guard.find_first_ref(filename))
+    }
+
+    pub fn search(&self, query: &SearchQuery) -> Result<SearchResponse, LiveIndexError> {
+        let guard = self
+            .inner
+            .read()
+            .map_err(|_| LiveIndexError::LockPoisoned)?;
+        Ok(guard.search(query))
     }
 
     pub fn resolve(&self, reference: crate::FileRef) -> Result<ResolvedFile, LiveIndexError> {
@@ -226,6 +236,20 @@ mod tests {
         let beta = shared.find_first_ref("beta.txt").unwrap().unwrap();
         let resolved = shared.resolve(beta.reference).unwrap();
         assert_eq!(resolved.name, "beta.txt");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn live_search_returns_generation_consistent_results() {
+        let root = temp_root("live-search");
+        fs::write(root.join("config.toml"), b"").unwrap();
+        let shared = shared_from_root(&root);
+
+        let response = shared.search(&SearchQuery::exact("config.toml")).unwrap();
+        assert_eq!(response.generation, shared.generation().unwrap());
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(response.hits[0].reference.generation, response.generation);
 
         fs::remove_dir_all(root).unwrap();
     }
