@@ -2,7 +2,7 @@ use crate::{LiveIndexError, ReloadError, SharedGenerationEngine};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::error::Error;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -70,11 +70,6 @@ impl From<notify::Error> for WatcherError {
     }
 }
 
-/// Background native filesystem watcher for one SharedGenerationEngine.
-///
-/// Events are coalesced with a trailing-edge debounce. One event burst causes one
-/// full candidate rebuild, while reads remain available during the disk scan. The
-/// watcher owns its worker thread and stops it on Drop.
 pub struct LiveWatcher {
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<WatcherStatus>>,
@@ -86,7 +81,7 @@ impl LiveWatcher {
         engine: SharedGenerationEngine,
         config: WatcherConfig,
     ) -> Result<Self, WatcherError> {
-        let (root, ignored_state_path) = engine.watch_snapshot()?;
+        let root = PathBuf::from(engine.active_root()?);
         let generation = engine.generation()?;
         let stop = Arc::new(AtomicBool::new(false));
         let status = Arc::new(Mutex::new(WatcherStatus {
@@ -108,7 +103,6 @@ impl LiveWatcher {
                 run_worker(
                     engine,
                     root,
-                    ignored_state_path,
                     config,
                     worker_stop,
                     worker_status,
@@ -165,7 +159,6 @@ impl Drop for LiveWatcher {
 fn run_worker(
     engine: SharedGenerationEngine,
     root: PathBuf,
-    ignored_state_path: PathBuf,
     config: WatcherConfig,
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<WatcherStatus>>,
@@ -202,7 +195,7 @@ fn run_worker(
             }
         };
 
-        if !handle_event_result(first, &ignored_state_path, &status) {
+        if !handle_event_result(first, &status) {
             continue;
         }
 
@@ -217,7 +210,7 @@ fn run_worker(
             }
             match event_rx.recv_timeout(deadline.saturating_duration_since(now)) {
                 Ok(event) => {
-                    if handle_event_result(event, &ignored_state_path, &status) {
+                    if handle_event_result(event, &status) {
                         deadline = Instant::now() + config.debounce;
                     }
                 }
@@ -267,17 +260,13 @@ fn build_watcher(
     })?)
 }
 
-fn handle_event_result(
-    result: notify::Result<Event>,
-    ignored_state_path: &Path,
-    status: &Arc<Mutex<WatcherStatus>>,
-) -> bool {
+fn handle_event_result(result: notify::Result<Event>, status: &Arc<Mutex<WatcherStatus>>) -> bool {
     match result {
         Ok(event) => {
             update_status(status, |current| {
                 current.events_seen = current.events_seen.saturating_add(1);
             });
-            event_requires_rebuild(&event, ignored_state_path)
+            event_requires_rebuild(&event)
         }
         Err(error) => {
             record_error(status, error.to_string());
@@ -286,21 +275,8 @@ fn handle_event_result(
     }
 }
 
-fn event_requires_rebuild(event: &Event, ignored_state_path: &Path) -> bool {
-    if matches!(event.kind, EventKind::Access(_)) {
-        return false;
-    }
-
-    if !event.paths.is_empty()
-        && event
-            .paths
-            .iter()
-            .all(|path| path.as_path() == ignored_state_path)
-    {
-        return false;
-    }
-
-    true
+fn event_requires_rebuild(event: &Event) -> bool {
+    !matches!(event.kind, EventKind::Access(_))
 }
 
 fn update_status(status: &Arc<Mutex<WatcherStatus>>, update: impl FnOnce(&mut WatcherStatus)) {
@@ -321,6 +297,7 @@ mod tests {
     use skb::state::UsageState;
     use skb::FileIndex;
     use std::fs;
+    use std::path::Path;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -358,15 +335,7 @@ mod tests {
     #[test]
     fn access_events_do_not_trigger_rebuild() {
         let event = Event::new(EventKind::Access(notify::event::AccessKind::Any));
-        assert!(!event_requires_rebuild(&event, Path::new("ignored")));
-    }
-
-    #[test]
-    fn state_file_events_are_ignored() {
-        let ignored = PathBuf::from("root/.skb-state.json");
-        let event = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
-            .add_path(ignored.clone());
-        assert!(!event_requires_rebuild(&event, &ignored));
+        assert!(!event_requires_rebuild(&event));
     }
 
     #[test]
