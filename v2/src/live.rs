@@ -1,7 +1,8 @@
 #[cfg(test)]
 use crate::INITIAL_GENERATION;
 use crate::{
-    GenerationEngine, LeanFileRefV2, ReloadError, ResolveError, SearchQuery, SearchResponse,
+    AutoSearchRequest, AutoSearchResponse, GenerationEngine, LeanFileRefV2, ReloadError,
+    ResolveError, SearchQuery, SearchResponse,
 };
 use serde::{Deserialize, Serialize};
 use skb::state::UsageState;
@@ -109,6 +110,19 @@ impl SharedGenerationEngine {
             .read()
             .map_err(|_| LiveIndexError::LockPoisoned)?;
         Ok(guard.search(query))
+    }
+
+    /// Run the high-level automatic search planner while holding one read lock,
+    /// guaranteeing that every staged exact/prefix/fuzzy attempt sees one generation.
+    pub fn search_auto(
+        &self,
+        request: &AutoSearchRequest,
+    ) -> Result<AutoSearchResponse, LiveIndexError> {
+        let guard = self
+            .inner
+            .read()
+            .map_err(|_| LiveIndexError::LockPoisoned)?;
+        Ok(guard.search_auto(request))
     }
 
     pub fn resolve(&self, reference: crate::FileRef) -> Result<ResolvedFile, LiveIndexError> {
@@ -247,6 +261,22 @@ mod tests {
         let shared = shared_from_root(&root);
 
         let response = shared.search(&SearchQuery::exact("config.toml")).unwrap();
+        assert_eq!(response.generation, shared.generation().unwrap());
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(response.hits[0].reference.generation, response.generation);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn live_auto_search_is_generation_consistent() {
+        let root = temp_root("live-auto-search");
+        fs::write(root.join("restore_config.rs"), b"").unwrap();
+        let shared = shared_from_root(&root);
+
+        let response = shared
+            .search_auto(&AutoSearchRequest::new("restor conf"))
+            .unwrap();
         assert_eq!(response.generation, shared.generation().unwrap());
         assert_eq!(response.hits.len(), 1);
         assert_eq!(response.hits[0].reference.generation, response.generation);
