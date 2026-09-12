@@ -9,3 +9,4 @@ license = "MIT"
 [dependencies]
 skb = { package = "smart-kernel-brain", path = ".." }
 serde = { version = "=1.0.229", features = ["derive"] }
+notify = "8"
