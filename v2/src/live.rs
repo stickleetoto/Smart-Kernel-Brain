@@ -1,4 +1,6 @@
-use crate::{GenerationEngine, LeanFileRefV2, ReloadError, ResolveError};
+use crate::{
+    GenerationEngine, LeanFileRefV2, ReloadError, ResolveError, INITIAL_GENERATION,
+};
 use serde::{Deserialize, Serialize};
 use skb::state::UsageState;
 use skb::{FileIndex, ResolvedFile};
