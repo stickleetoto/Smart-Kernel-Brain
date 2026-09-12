@@ -108,7 +108,11 @@ fn search_index(index: &FileIndex, generation: u64, query: &SearchQuery) -> Sear
         SearchMode::Prefix => {
             for raw_id in 0..index.entry_count() {
                 let file_id = raw_id as u32;
-                if !index.entry_name(file_id).to_lowercase().starts_with(&term_folded) {
+                if !index
+                    .entry_name(file_id)
+                    .to_lowercase()
+                    .starts_with(&term_folded)
+                {
                     continue;
                 }
                 if !candidate_matches(
@@ -242,10 +246,8 @@ mod tests {
 
     fn temp_root(label: &str) -> PathBuf {
         let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "skb-v2-search-{label}-{}-{id}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("skb-v2-search-{label}-{}-{id}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         root
     }
