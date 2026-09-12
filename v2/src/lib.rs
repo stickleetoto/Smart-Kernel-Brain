@@ -1,7 +1,9 @@
 pub mod live;
+pub mod search;
 pub mod watcher;
 
 pub use live::{LiveIndexError, ReloadReport, SharedGenerationEngine};
+pub use search::{SearchHitV2, SearchMode, SearchQuery, SearchResponse};
 pub use watcher::{LiveWatcher, WatcherConfig, WatcherError, WatcherStatus};
 
 use serde::{Deserialize, Serialize};
