@@ -110,13 +110,15 @@ impl GenerationEngine {
     }
 
     pub fn find_first_ref(&self, filename: &str) -> Option<LeanFileRefV2> {
-        self.engine.find_first_ref(filename).map(|hit| LeanFileRefV2 {
-            reference: FileRef {
-                generation: self.generation,
-                file_id: hit.file_id,
-            },
-            hot_cache_hit: hit.hot_cache_hit,
-        })
+        self.engine
+            .find_first_ref(filename)
+            .map(|hit| LeanFileRefV2 {
+                reference: FileRef {
+                    generation: self.generation,
+                    file_id: hit.file_id,
+                },
+                hot_cache_hit: hit.hot_cache_hit,
+            })
     }
 
     pub fn resolve(&self, reference: FileRef) -> Result<ResolvedFile, ResolveError> {
@@ -136,10 +138,7 @@ impl GenerationEngine {
 
     /// Resolve in input order. Each stale/missing reference is reported explicitly
     /// instead of being silently dropped.
-    pub fn resolve_many(
-        &self,
-        references: &[FileRef],
-    ) -> Vec<Result<ResolvedFile, ResolveError>> {
+    pub fn resolve_many(&self, references: &[FileRef]) -> Vec<Result<ResolvedFile, ResolveError>> {
         references
             .iter()
             .copied()
