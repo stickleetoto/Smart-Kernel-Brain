@@ -236,10 +236,8 @@ mod tests {
 
     fn temp_root(label: &str) -> PathBuf {
         let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "skb-v2-auto-{label}-{}-{id}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("skb-v2-auto-{label}-{}-{id}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         root
     }
@@ -332,7 +330,10 @@ mod tests {
             response.plan.inferred_path_contains.as_deref(),
             Some("src/core")
         );
-        assert!(response.hits[0].path.replace('\\', "/").contains("src/core"));
+        assert!(response.hits[0]
+            .path
+            .replace('\\', "/")
+            .contains("src/core"));
 
         fs::remove_dir_all(root).unwrap();
     }
