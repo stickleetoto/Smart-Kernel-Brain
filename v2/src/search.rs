@@ -173,13 +173,7 @@ fn search_exact(
     let mut truncated = false;
 
     for file_id in index.exact_candidates(&query.term) {
-        if !candidate_matches(
-            index,
-            file_id,
-            extension_filters,
-            path_filter,
-            scope_filter,
-        ) {
+        if !candidate_matches(index, file_id, extension_filters, path_filter, scope_filter) {
             continue;
         }
         if hits.len() == limit {
@@ -220,13 +214,7 @@ fn search_prefix(
         if !name_folded.starts_with(term_folded) {
             continue;
         }
-        if !candidate_matches(
-            index,
-            file_id,
-            extension_filters,
-            path_filter,
-            scope_filter,
-        ) {
+        if !candidate_matches(index, file_id, extension_filters, path_filter, scope_filter) {
             continue;
         }
 
@@ -269,13 +257,7 @@ fn search_fuzzy(
 
     for raw_id in 0..index.entry_count() {
         let file_id = raw_id as u32;
-        if !candidate_matches(
-            index,
-            file_id,
-            extension_filters,
-            path_filter,
-            scope_filter,
-        ) {
+        if !candidate_matches(index, file_id, extension_filters, path_filter, scope_filter) {
             continue;
         }
 
@@ -457,7 +439,10 @@ fn fuzzy_score(query_normalized: &str, name: &str) -> Option<(u16, SearchMatchKi
     let whole_similarity = similarity_percent(&query_compact, &name_compact) as u16;
     let whole_score = 480u16.saturating_add(whole_similarity.saturating_mul(4));
 
-    Some((token_score.max(whole_score).min(920), SearchMatchKind::Fuzzy))
+    Some((
+        token_score.max(whole_score).min(920),
+        SearchMatchKind::Fuzzy,
+    ))
 }
 
 fn token_similarity(query: &str, candidate: &str) -> u8 {
@@ -767,7 +752,10 @@ mod tests {
 
         assert_eq!(response.hits.len(), 3);
         assert!(response.truncated);
-        assert!(response.hits.windows(2).all(|pair| pair[0].score >= pair[1].score));
+        assert!(response
+            .hits
+            .windows(2)
+            .all(|pair| pair[0].score >= pair[1].score));
 
         fs::remove_dir_all(root).unwrap();
     }
