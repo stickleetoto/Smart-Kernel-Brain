@@ -39,11 +39,7 @@ fn main() {
     );
 }
 
-fn run_rounds(
-    engine: &GenerationEngine,
-    query: &SearchQuery,
-    rounds: usize,
-) -> (Duration, usize) {
+fn run_rounds(engine: &GenerationEngine, query: &SearchQuery, rounds: usize) -> (Duration, usize) {
     let started = Instant::now();
     let mut hits = 0usize;
     for _ in 0..rounds {
