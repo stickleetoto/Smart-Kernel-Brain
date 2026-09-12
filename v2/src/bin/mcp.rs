@@ -197,10 +197,12 @@ fn tool_call(
 }
 
 fn parse_search_request(args: &Value) -> Result<AutoSearchRequest, (i64, String)> {
-    let query = args
-        .get("query")
-        .and_then(Value::as_str)
-        .ok_or_else(|| (-32602, "skb_search requires string argument `query`".to_string()))?;
+    let query = args.get("query").and_then(Value::as_str).ok_or_else(|| {
+        (
+            -32602,
+            "skb_search requires string argument `query`".to_string(),
+        )
+    })?;
     if query.trim().is_empty() {
         return Err((-32602, "query must not be empty".to_string()));
     }
@@ -276,11 +278,14 @@ fn parse_extensions(args: &Value) -> Result<Vec<String>, (i64, String)> {
     values
         .iter()
         .map(|value| {
-            let extension = value.as_str().ok_or_else(|| {
-                (-32602, "every extension must be a string".to_string())
-            })?;
+            let extension = value
+                .as_str()
+                .ok_or_else(|| (-32602, "every extension must be a string".to_string()))?;
             if extension.trim().is_empty() {
-                return Err((-32602, "extensions must not contain empty values".to_string()));
+                return Err((
+                    -32602,
+                    "extensions must not contain empty values".to_string(),
+                ));
             }
             Ok(extension.to_owned())
         })
@@ -290,7 +295,10 @@ fn parse_extensions(args: &Value) -> Result<Vec<String>, (i64, String)> {
 fn validate_metadata_filter(filter: &MetadataFilter) -> Result<(), (i64, String)> {
     if let (Some(minimum), Some(maximum)) = (filter.min_size_bytes, filter.max_size_bytes) {
         if minimum > maximum {
-            return Err((-32602, "min_size_bytes must be <= max_size_bytes".to_string()));
+            return Err((
+                -32602,
+                "min_size_bytes must be <= max_size_bytes".to_string(),
+            ));
         }
     }
     if let (Some(after), Some(before)) = (
