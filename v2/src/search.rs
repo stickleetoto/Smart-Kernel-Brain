@@ -1,16 +1,29 @@
 use crate::{FileRef, GenerationEngine};
 use serde::{Deserialize, Serialize};
 use skb::FileIndex;
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
 use std::path::Path;
 
 const DEFAULT_LIMIT: usize = 32;
 const MAX_LIMIT: usize = 4096;
+const FUZZY_MIN_SCORE: u16 = 700;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchMode {
     Exact,
     Prefix,
+    Fuzzy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchMatchKind {
+    Exact,
+    Prefix,
+    Substring,
+    Fuzzy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,29 +40,30 @@ pub struct SearchQuery {
 
 impl SearchQuery {
     pub fn exact(term: impl Into<String>) -> Self {
-        Self {
-            term: term.into(),
-            mode: SearchMode::Exact,
-            extensions: Vec::new(),
-            path_contains: None,
-            scope: None,
-            limit: DEFAULT_LIMIT,
-        }
+        Self::new(term, SearchMode::Exact)
     }
 
     pub fn prefix(term: impl Into<String>) -> Self {
-        Self {
-            term: term.into(),
-            mode: SearchMode::Prefix,
-            extensions: Vec::new(),
-            path_contains: None,
-            scope: None,
-            limit: DEFAULT_LIMIT,
-        }
+        Self::new(term, SearchMode::Prefix)
+    }
+
+    pub fn fuzzy(term: impl Into<String>) -> Self {
+        Self::new(term, SearchMode::Fuzzy)
     }
 
     pub fn effective_limit(&self) -> usize {
         self.limit.clamp(1, MAX_LIMIT)
+    }
+
+    fn new(term: impl Into<String>, mode: SearchMode) -> Self {
+        Self {
+            term: term.into(),
+            mode,
+            extensions: Vec::new(),
+            path_contains: None,
+            scope: None,
+            limit: DEFAULT_LIMIT,
+        }
     }
 }
 
@@ -58,6 +72,8 @@ pub struct SearchHitV2 {
     pub reference: FileRef,
     pub name: String,
     pub path: String,
+    pub score: u16,
+    pub match_kind: SearchMatchKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +81,27 @@ pub struct SearchResponse {
     pub generation: u64,
     pub hits: Vec<SearchHitV2>,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RankedCandidate {
+    score: u16,
+    file_id: u32,
+    match_kind: SearchMatchKind,
+}
+
+impl Ord for RankedCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.score
+            .cmp(&other.score)
+            .then_with(|| other.file_id.cmp(&self.file_id))
+    }
+}
+
+impl PartialOrd for RankedCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl GenerationEngine {
@@ -79,59 +116,223 @@ fn default_limit() -> usize {
 
 fn search_index(index: &FileIndex, generation: u64, query: &SearchQuery) -> SearchResponse {
     let limit = query.effective_limit();
+    if query.term.trim().is_empty() {
+        return SearchResponse {
+            generation,
+            hits: Vec::new(),
+            truncated: false,
+        };
+    }
+
     let extension_filters = normalize_extensions(&query.extensions);
     let path_filter = query.path_contains.as_deref().map(normalize_path_text);
     let scope_filter = query.scope.as_deref().map(normalize_scope_text);
     let term_folded = query.term.to_lowercase();
 
+    match query.mode {
+        SearchMode::Exact => search_exact(
+            index,
+            generation,
+            query,
+            limit,
+            &extension_filters,
+            path_filter.as_deref(),
+            scope_filter.as_deref(),
+        ),
+        SearchMode::Prefix => search_prefix(
+            index,
+            generation,
+            &term_folded,
+            limit,
+            &extension_filters,
+            path_filter.as_deref(),
+            scope_filter.as_deref(),
+        ),
+        SearchMode::Fuzzy => search_fuzzy(
+            index,
+            generation,
+            &query.term,
+            limit,
+            &extension_filters,
+            path_filter.as_deref(),
+            scope_filter.as_deref(),
+        ),
+    }
+}
+
+fn search_exact(
+    index: &FileIndex,
+    generation: u64,
+    query: &SearchQuery,
+    limit: usize,
+    extension_filters: &[String],
+    path_filter: Option<&str>,
+    scope_filter: Option<&str>,
+) -> SearchResponse {
     let mut hits = Vec::with_capacity(limit.min(64));
     let mut truncated = false;
 
-    match query.mode {
-        SearchMode::Exact => {
-            for file_id in index.exact_candidates(&query.term) {
-                if candidate_matches(
-                    index,
-                    file_id,
-                    &extension_filters,
-                    path_filter.as_deref(),
-                    scope_filter.as_deref(),
-                ) {
-                    if hits.len() == limit {
-                        truncated = true;
-                        break;
-                    }
-                    hits.push(materialize_hit(index, generation, file_id));
-                }
-            }
+    for file_id in index.exact_candidates(&query.term) {
+        if !candidate_matches(
+            index,
+            file_id,
+            extension_filters,
+            path_filter,
+            scope_filter,
+        ) {
+            continue;
         }
-        SearchMode::Prefix => {
-            for raw_id in 0..index.entry_count() {
-                let file_id = raw_id as u32;
-                if !index
-                    .entry_name(file_id)
-                    .to_lowercase()
-                    .starts_with(&term_folded)
-                {
-                    continue;
-                }
-                if !candidate_matches(
-                    index,
-                    file_id,
-                    &extension_filters,
-                    path_filter.as_deref(),
-                    scope_filter.as_deref(),
-                ) {
-                    continue;
-                }
-                if hits.len() == limit {
-                    truncated = true;
-                    break;
-                }
-                hits.push(materialize_hit(index, generation, file_id));
-            }
+        if hits.len() == limit {
+            truncated = true;
+            break;
         }
+        hits.push(materialize_hit(
+            index,
+            generation,
+            file_id,
+            1000,
+            SearchMatchKind::Exact,
+        ));
     }
+
+    SearchResponse {
+        generation,
+        hits,
+        truncated,
+    }
+}
+
+fn search_prefix(
+    index: &FileIndex,
+    generation: u64,
+    term_folded: &str,
+    limit: usize,
+    extension_filters: &[String],
+    path_filter: Option<&str>,
+    scope_filter: Option<&str>,
+) -> SearchResponse {
+    let mut ranked = BinaryHeap::with_capacity(limit.saturating_add(1));
+    let mut matching = 0usize;
+
+    for raw_id in 0..index.entry_count() {
+        let file_id = raw_id as u32;
+        let name_folded = index.entry_name(file_id).to_lowercase();
+        if !name_folded.starts_with(term_folded) {
+            continue;
+        }
+        if !candidate_matches(
+            index,
+            file_id,
+            extension_filters,
+            path_filter,
+            scope_filter,
+        ) {
+            continue;
+        }
+
+        matching = matching.saturating_add(1);
+        let score = prefix_score(term_folded, &name_folded);
+        push_ranked(
+            &mut ranked,
+            limit,
+            RankedCandidate {
+                score,
+                file_id,
+                match_kind: SearchMatchKind::Prefix,
+            },
+        );
+    }
+
+    finalize_ranked(index, generation, ranked, matching > limit)
+}
+
+fn search_fuzzy(
+    index: &FileIndex,
+    generation: u64,
+    term: &str,
+    limit: usize,
+    extension_filters: &[String],
+    path_filter: Option<&str>,
+    scope_filter: Option<&str>,
+) -> SearchResponse {
+    let query_normalized = normalize_fuzzy_text(term);
+    if query_normalized.is_empty() {
+        return SearchResponse {
+            generation,
+            hits: Vec::new(),
+            truncated: false,
+        };
+    }
+
+    let mut ranked = BinaryHeap::with_capacity(limit.saturating_add(1));
+    let mut matching = 0usize;
+
+    for raw_id in 0..index.entry_count() {
+        let file_id = raw_id as u32;
+        if !candidate_matches(
+            index,
+            file_id,
+            extension_filters,
+            path_filter,
+            scope_filter,
+        ) {
+            continue;
+        }
+
+        let Some((score, match_kind)) = fuzzy_score(&query_normalized, index.entry_name(file_id))
+        else {
+            continue;
+        };
+        if score < FUZZY_MIN_SCORE {
+            continue;
+        }
+
+        matching = matching.saturating_add(1);
+        push_ranked(
+            &mut ranked,
+            limit,
+            RankedCandidate {
+                score,
+                file_id,
+                match_kind,
+            },
+        );
+    }
+
+    finalize_ranked(index, generation, ranked, matching > limit)
+}
+
+fn push_ranked(
+    heap: &mut BinaryHeap<Reverse<RankedCandidate>>,
+    limit: usize,
+    candidate: RankedCandidate,
+) {
+    heap.push(Reverse(candidate));
+    if heap.len() > limit {
+        let _ = heap.pop();
+    }
+}
+
+fn finalize_ranked(
+    index: &FileIndex,
+    generation: u64,
+    heap: BinaryHeap<Reverse<RankedCandidate>>,
+    truncated: bool,
+) -> SearchResponse {
+    let mut candidates: Vec<RankedCandidate> = heap.into_iter().map(|item| item.0).collect();
+    candidates.sort_unstable_by(|left, right| right.cmp(left));
+    let hits = candidates
+        .into_iter()
+        .map(|candidate| {
+            materialize_hit(
+                index,
+                generation,
+                candidate.file_id,
+                candidate.score,
+                candidate.match_kind,
+            )
+        })
+        .collect();
 
     SearchResponse {
         generation,
@@ -175,7 +376,13 @@ fn candidate_matches(
     true
 }
 
-fn materialize_hit(index: &FileIndex, generation: u64, file_id: u32) -> SearchHitV2 {
+fn materialize_hit(
+    index: &FileIndex,
+    generation: u64,
+    file_id: u32,
+    score: u16,
+    match_kind: SearchMatchKind,
+) -> SearchHitV2 {
     SearchHitV2 {
         reference: FileRef {
             generation,
@@ -183,7 +390,147 @@ fn materialize_hit(index: &FileIndex, generation: u64, file_id: u32) -> SearchHi
         },
         name: index.entry_name(file_id).to_owned(),
         path: index.entry_path(file_id),
+        score,
+        match_kind,
     }
+}
+
+fn prefix_score(term: &str, name: &str) -> u16 {
+    let extra = name.chars().count().saturating_sub(term.chars().count());
+    950u16.saturating_sub(extra.min(50) as u16)
+}
+
+fn fuzzy_score(query_normalized: &str, name: &str) -> Option<(u16, SearchMatchKind)> {
+    let name_folded = name.to_lowercase();
+    let query_folded = query_normalized.to_lowercase();
+
+    if name_folded == query_folded {
+        return Some((1000, SearchMatchKind::Exact));
+    }
+    if name_folded.starts_with(&query_folded) {
+        return Some((970, SearchMatchKind::Prefix));
+    }
+    if name_folded.contains(&query_folded) {
+        return Some((930, SearchMatchKind::Substring));
+    }
+
+    let name_normalized = normalize_fuzzy_text(&name_folded);
+    if name_normalized == query_normalized {
+        return Some((995, SearchMatchKind::Exact));
+    }
+    if name_normalized.starts_with(query_normalized) {
+        return Some((965, SearchMatchKind::Prefix));
+    }
+    if name_normalized.contains(query_normalized) {
+        return Some((925, SearchMatchKind::Substring));
+    }
+
+    let query_tokens: Vec<&str> = query_normalized.split_whitespace().collect();
+    let name_tokens: Vec<&str> = name_normalized.split_whitespace().collect();
+    if query_tokens.is_empty() || name_tokens.is_empty() {
+        return None;
+    }
+
+    let mut token_total = 0u32;
+    for query_token in &query_tokens {
+        let best = name_tokens
+            .iter()
+            .map(|name_token| token_similarity(query_token, name_token))
+            .max()
+            .unwrap_or(0);
+        let required = if query_token.chars().count() <= 2 {
+            90
+        } else {
+            55
+        };
+        if best < required {
+            return None;
+        }
+        token_total = token_total.saturating_add(best as u32);
+    }
+
+    let token_average = (token_total / query_tokens.len() as u32) as u16;
+    let token_score = 520u16.saturating_add(token_average.saturating_mul(4));
+
+    let query_compact: String = query_normalized.chars().filter(|ch| *ch != ' ').collect();
+    let name_compact: String = name_normalized.chars().filter(|ch| *ch != ' ').collect();
+    let whole_similarity = similarity_percent(&query_compact, &name_compact) as u16;
+    let whole_score = 480u16.saturating_add(whole_similarity.saturating_mul(4));
+
+    Some((token_score.max(whole_score).min(920), SearchMatchKind::Fuzzy))
+}
+
+fn token_similarity(query: &str, candidate: &str) -> u8 {
+    if query == candidate {
+        return 100;
+    }
+    if candidate.starts_with(query) {
+        return 94;
+    }
+    if query.starts_with(candidate) && candidate.chars().count() >= 3 {
+        return 88;
+    }
+    if query.chars().count() >= 3 && candidate.contains(query) {
+        return 86;
+    }
+    similarity_percent(query, candidate)
+}
+
+fn similarity_percent(left: &str, right: &str) -> u8 {
+    let left_chars: Vec<char> = left.chars().collect();
+    let right_chars: Vec<char> = right.chars().collect();
+    let longest = left_chars.len().max(right_chars.len());
+    if longest == 0 {
+        return 100;
+    }
+
+    let distance = levenshtein_chars(&left_chars, &right_chars);
+    (((longest.saturating_sub(distance)) * 100) / longest) as u8
+}
+
+fn levenshtein_chars(left: &[char], right: &[char]) -> usize {
+    if left.is_empty() {
+        return right.len();
+    }
+    if right.is_empty() {
+        return left.len();
+    }
+
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0usize; right.len() + 1];
+
+    for (left_index, left_char) in left.iter().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right.iter().enumerate() {
+            let substitution = previous[right_index] + usize::from(left_char != right_char);
+            let insertion = current[right_index] + 1;
+            let deletion = previous[right_index + 1] + 1;
+            current[right_index + 1] = substitution.min(insertion).min(deletion);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right.len()]
+}
+
+fn normalize_fuzzy_text(value: &str) -> String {
+    let mut normalized = String::with_capacity(value.len());
+    let mut previous_separator = true;
+
+    for character in value.chars().flat_map(char::to_lowercase) {
+        if character.is_alphanumeric() {
+            normalized.push(character);
+            previous_separator = false;
+        } else if !previous_separator {
+            normalized.push(' ');
+            previous_separator = true;
+        }
+    }
+
+    if normalized.ends_with(' ') {
+        normalized.pop();
+    }
+    normalized
 }
 
 fn normalize_extensions(extensions: &[String]) -> Vec<String> {
@@ -271,6 +618,8 @@ mod tests {
         assert_eq!(response.hits.len(), 1);
         assert_eq!(response.hits[0].reference.generation, engine.generation());
         assert_eq!(response.hits[0].name, "README.md");
+        assert_eq!(response.hits[0].score, 1000);
+        assert_eq!(response.hits[0].match_kind, SearchMatchKind::Exact);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -332,5 +681,100 @@ mod tests {
         assert!(response.truncated);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_terms_never_expand_to_every_file() {
+        let root = temp_root("empty");
+        fs::write(root.join("one.rs"), b"").unwrap();
+        fs::write(root.join("two.rs"), b"").unwrap();
+        let engine = engine_from_root(&root);
+
+        assert!(engine.search(&SearchQuery::prefix("  ")).hits.is_empty());
+        assert!(engine.search(&SearchQuery::fuzzy("  ")).hits.is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fuzzy_search_ranks_multi_token_intent() {
+        let root = temp_root("fuzzy-ranking");
+        fs::write(root.join("restore_config.rs"), b"").unwrap();
+        fs::write(root.join("restore_cache.rs"), b"").unwrap();
+        fs::write(root.join("report_config.rs"), b"").unwrap();
+        fs::write(root.join("unrelated.txt"), b"").unwrap();
+        let engine = engine_from_root(&root);
+
+        let response = engine.search(&SearchQuery::fuzzy("restor conf"));
+
+        assert!(!response.hits.is_empty());
+        assert_eq!(response.hits[0].name, "restore_config.rs");
+        assert_eq!(response.hits[0].match_kind, SearchMatchKind::Fuzzy);
+        assert!(response.hits[0].score >= FUZZY_MIN_SCORE);
+        assert!(response.hits.iter().all(|hit| hit.name != "unrelated.txt"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fuzzy_search_tolerates_small_typo() {
+        let root = temp_root("fuzzy-typo");
+        fs::write(root.join("restore.rs"), b"").unwrap();
+        fs::write(root.join("resource.rs"), b"").unwrap();
+        let engine = engine_from_root(&root);
+
+        let response = engine.search(&SearchQuery::fuzzy("restor"));
+
+        assert!(!response.hits.is_empty());
+        assert_eq!(response.hits[0].name, "restore.rs");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fuzzy_search_respects_extension_and_scope_filters() {
+        let root = temp_root("fuzzy-filters");
+        fs::create_dir_all(root.join("bio/src")).unwrap();
+        fs::create_dir_all(root.join("wayline/src")).unwrap();
+        fs::write(root.join("bio/src/restore_config.rs"), b"").unwrap();
+        fs::write(root.join("bio/src/restore_config.md"), b"").unwrap();
+        fs::write(root.join("wayline/src/restore_config.rs"), b"").unwrap();
+        let engine = engine_from_root(&root);
+
+        let mut query = SearchQuery::fuzzy("restor conf");
+        query.extensions = vec!["rs".to_string()];
+        query.scope = Some("bio".to_string());
+        let response = engine.search(&query);
+
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(response.hits[0].name, "restore_config.rs");
+        assert!(normalize_path_text(&response.hits[0].path).contains("/bio/src/"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fuzzy_top_k_is_bounded_and_reports_truncation() {
+        let root = temp_root("fuzzy-limit");
+        for index in 0..8 {
+            fs::write(root.join(format!("config_restore_{index}.rs")), b"").unwrap();
+        }
+        let engine = engine_from_root(&root);
+
+        let mut query = SearchQuery::fuzzy("config restore");
+        query.limit = 3;
+        let response = engine.search(&query);
+
+        assert_eq!(response.hits.len(), 3);
+        assert!(response.truncated);
+        assert!(response.hits.windows(2).all(|pair| pair[0].score >= pair[1].score));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn levenshtein_similarity_handles_unicode_without_panicking() {
+        assert_eq!(similarity_percent("복구", "복구"), 100);
+        assert!(similarity_percent("복구", "복귀") >= 50);
     }
 }
