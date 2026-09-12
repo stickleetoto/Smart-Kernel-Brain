@@ -4,9 +4,7 @@ pub mod search;
 pub mod watcher;
 
 pub use live::{LiveIndexError, ReloadReport, SharedGenerationEngine};
-pub use planner::{
-    AutoPlanKind, AutoSearchPlan, AutoSearchRequest, AutoSearchResponse,
-};
+pub use planner::{AutoPlanKind, AutoSearchPlan, AutoSearchRequest, AutoSearchResponse};
 pub use search::{
     FileMetadataV2, MetadataFilter, SearchHitV2, SearchMatchKind, SearchMode, SearchQuery,
     SearchResponse,
