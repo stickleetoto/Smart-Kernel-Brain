@@ -1,0 +1,13 @@
+[package]
+name = "skb-v2"
+version = "2.0.0-alpha.1"
+edition = "2021"
+publish = false
+description = "Generation-safe AI retrieval layer for Smart Kernel Brain v2"
+license = "MIT"
+
+[dependencies]
+skb = { package = "smart-kernel-brain", path = ".." }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+notify = "8"

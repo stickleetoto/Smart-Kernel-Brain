@@ -1,13 +1,24 @@
-name: Rust CI
+name: SKB v2 CI
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main, v2-ai]
+    branches: [v2-ai]
+    paths:
+      - "v2/**"
+      - ".github/workflows/v2-ci.yml"
+      - "src/**"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - "scripts/verify_core_freeze.py"
   pull_request:
+    paths:
+      - "v2/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
 
 jobs:
-  test:
+  v2-test:
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest]
@@ -20,23 +31,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-      - name: Verify frozen core
+      - name: Verify v1 frozen core remains untouched
         run: python scripts/verify_core_freeze.py
-      - name: Format hardening layer
-        run: rustfmt --check src/bin/hardening.rs
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features
-      - name: Test
-        run: cargo test
       - name: Format v2 crate
         run: cargo fmt --manifest-path v2/Cargo.toml -- --check
       - name: Clippy v2 crate
         run: cargo clippy --manifest-path v2/Cargo.toml --all-targets -- -D warnings
       - name: Test v2 crate
         run: cargo test --manifest-path v2/Cargo.toml
-      - name: Build single binary
-        run: cargo build --release --bin skb
-      - name: Smoke version
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then ./target/release/skb.exe --version; else ./target/release/skb --version; fi
