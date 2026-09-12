@@ -1,3 +1,7 @@
+pub mod live;
+
+pub use live::{LiveIndexError, ReloadReport, SharedGenerationEngine};
+
 use serde::{Deserialize, Serialize};
 use skb::state::UsageState;
 use skb::{FileIndex, ResolvedFile, SearchEngine};
@@ -61,6 +65,10 @@ pub enum ReloadError {
         active_root: String,
         candidate_root: String,
     },
+    GenerationChangedDuringBuild {
+        expected_generation: u64,
+        active_generation: u64,
+    },
     GenerationExhausted,
 }
 
@@ -73,6 +81,13 @@ impl fmt::Display for ReloadError {
             } => write!(
                 f,
                 "candidate index root changed from {active_root:?} to {candidate_root:?}"
+            ),
+            Self::GenerationChangedDuringBuild {
+                expected_generation,
+                active_generation,
+            } => write!(
+                f,
+                "candidate was built from generation {expected_generation}, but active generation is now {active_generation}"
             ),
             Self::GenerationExhausted => write!(f, "index generation counter exhausted"),
         }
