@@ -1,6 +1,4 @@
-use crate::{
-    GenerationEngine, LeanFileRefV2, ReloadError, ResolveError, INITIAL_GENERATION,
-};
+use crate::{GenerationEngine, LeanFileRefV2, ReloadError, ResolveError, INITIAL_GENERATION};
 use serde::{Deserialize, Serialize};
 use skb::state::UsageState;
 use skb::{FileIndex, ResolvedFile};
@@ -78,29 +76,44 @@ impl SharedGenerationEngine {
     }
 
     pub fn generation(&self) -> Result<u64, LiveIndexError> {
-        let guard = self.inner.read().map_err(|_| LiveIndexError::LockPoisoned)?;
+        let guard = self
+            .inner
+            .read()
+            .map_err(|_| LiveIndexError::LockPoisoned)?;
         Ok(guard.generation())
     }
 
     pub fn active_root(&self) -> Result<String, LiveIndexError> {
-        let guard = self.inner.read().map_err(|_| LiveIndexError::LockPoisoned)?;
+        let guard = self
+            .inner
+            .read()
+            .map_err(|_| LiveIndexError::LockPoisoned)?;
         Ok(guard.active_index().root.clone())
     }
 
     pub fn find_first_ref(&self, filename: &str) -> Result<Option<LeanFileRefV2>, LiveIndexError> {
-        let guard = self.inner.read().map_err(|_| LiveIndexError::LockPoisoned)?;
+        let guard = self
+            .inner
+            .read()
+            .map_err(|_| LiveIndexError::LockPoisoned)?;
         Ok(guard.find_first_ref(filename))
     }
 
     pub fn resolve(&self, reference: crate::FileRef) -> Result<ResolvedFile, LiveIndexError> {
-        let guard = self.inner.read().map_err(|_| LiveIndexError::LockPoisoned)?;
+        let guard = self
+            .inner
+            .read()
+            .map_err(|_| LiveIndexError::LockPoisoned)?;
         Ok(guard.resolve(reference)?)
     }
 
     /// Atomically replace a fully built candidate. Readers can observe the old or
     /// the new generation, never a partially replaced SearchEngine.
     pub fn replace_index_atomic(&self, candidate: FileIndex) -> Result<u64, LiveIndexError> {
-        let mut guard = self.inner.write().map_err(|_| LiveIndexError::LockPoisoned)?;
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(|_| LiveIndexError::LockPoisoned)?;
         Ok(guard.replace_index(candidate)?)
     }
 
@@ -111,19 +124,24 @@ impl SharedGenerationEngine {
     /// rejected instead of overwriting the newer index.
     pub fn rebuild_from_disk(&self) -> Result<ReloadReport, LiveIndexError> {
         let (root, expected_generation) = {
-            let guard = self.inner.read().map_err(|_| LiveIndexError::LockPoisoned)?;
+            let guard = self
+                .inner
+                .read()
+                .map_err(|_| LiveIndexError::LockPoisoned)?;
             (guard.active_index().root.clone(), guard.generation())
         };
 
         validate_root(&root)?;
-        let (candidate, scan) = FileIndex::scan(Path::new(&root)).map_err(|error| {
-            LiveIndexError::RootUnavailable {
+        let (candidate, scan) =
+            FileIndex::scan(Path::new(&root)).map_err(|error| LiveIndexError::RootUnavailable {
                 root: root.clone(),
                 message: error.to_string(),
-            }
-        })?;
+            })?;
 
-        let mut guard = self.inner.write().map_err(|_| LiveIndexError::LockPoisoned)?;
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(|_| LiveIndexError::LockPoisoned)?;
         let active_generation = guard.generation();
         if active_generation != expected_generation {
             return Err(ReloadError::GenerationChangedDuringBuild {
@@ -169,10 +187,8 @@ mod tests {
 
     fn temp_root(label: &str) -> PathBuf {
         let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "skb-v2-live-{label}-{}-{id}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("skb-v2-live-{label}-{}-{id}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         root
     }
@@ -239,10 +255,7 @@ mod tests {
         let reader = shared.clone();
         let handle = thread::spawn(move || {
             for _ in 0..20_000 {
-                let hit = reader
-                    .find_first_ref("FILE_00000042.DAT")
-                    .unwrap()
-                    .unwrap();
+                let hit = reader.find_first_ref("FILE_00000042.DAT").unwrap().unwrap();
                 match reader.resolve(hit.reference) {
                     Ok(file) => assert_eq!(file.name, "file_00000042.dat"),
                     Err(LiveIndexError::Resolve(ResolveError::StaleReference { .. })) => {
