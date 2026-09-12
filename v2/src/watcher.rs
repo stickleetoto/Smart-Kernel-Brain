@@ -100,14 +100,7 @@ impl LiveWatcher {
         let worker = thread::Builder::new()
             .name("skb-v2-watcher".to_string())
             .spawn(move || {
-                run_worker(
-                    engine,
-                    root,
-                    config,
-                    worker_stop,
-                    worker_status,
-                    ready_tx,
-                );
+                run_worker(engine, root, config, worker_stop, worker_status, ready_tx);
             })
             .map_err(|error| WatcherError::Notify(notify::Error::generic(&error.to_string())))?;
 
