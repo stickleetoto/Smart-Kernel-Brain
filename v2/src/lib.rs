@@ -1,6 +1,8 @@
 pub mod live;
+pub mod watcher;
 
 pub use live::{LiveIndexError, ReloadReport, SharedGenerationEngine};
+pub use watcher::{LiveWatcher, WatcherConfig, WatcherError, WatcherStatus};
 
 use serde::{Deserialize, Serialize};
 use skb::state::UsageState;
@@ -178,7 +180,6 @@ impl GenerationEngine {
             .checked_add(1)
             .ok_or(ReloadError::GenerationExhausted)?;
 
-        // Build off to the side. No active state changes until this succeeds.
         let replacement = SearchEngine::new(
             candidate,
             self.engine.state.clone(),
@@ -246,7 +247,6 @@ mod tests {
 
         engine.replace_index(FileIndex::synthetic(10)).unwrap();
 
-        // file_id 3 exists in both generations, but an old reference must still fail.
         assert!(matches!(
             engine.resolve(old),
             Err(ResolveError::StaleReference { .. })
