@@ -211,12 +211,13 @@ mod tests {
         let next = engine.replace_index(FileIndex::synthetic(64)).unwrap();
         assert_eq!(next, INITIAL_GENERATION + 1);
 
+        let error = engine.resolve(old).unwrap_err();
         assert_eq!(
-            engine.resolve(old),
-            Err(ResolveError::StaleReference {
+            error,
+            ResolveError::StaleReference {
                 active_generation: INITIAL_GENERATION + 1,
                 reference_generation: INITIAL_GENERATION,
-            })
+            }
         );
     }
 
@@ -280,7 +281,7 @@ mod tests {
 
         let results = engine.resolve_many(&[first, second]);
         assert!(matches!(
-            results[0],
+            &results[0],
             Err(ResolveError::StaleReference { .. })
         ));
         assert_eq!(results[1].as_ref().unwrap().file_id, 2);
