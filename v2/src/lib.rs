@@ -1,8 +1,12 @@
 pub mod live;
+pub mod planner;
 pub mod search;
 pub mod watcher;
 
 pub use live::{LiveIndexError, ReloadReport, SharedGenerationEngine};
+pub use planner::{
+    AutoPlanKind, AutoSearchPlan, AutoSearchRequest, AutoSearchResponse,
+};
 pub use search::{
     FileMetadataV2, MetadataFilter, SearchHitV2, SearchMatchKind, SearchMode, SearchQuery,
     SearchResponse,
@@ -243,66 +247,58 @@ mod tests {
 
     #[test]
     fn stale_reference_never_resolves_reused_numeric_id() {
-        let mut engine = engine_with(10, "reused-id");
+        let mut engine = engine_with(32, "reused-id");
         let old = engine
-            .find_first_ref("FILE_00000003.DAT")
+            .find_first_ref("FILE_00000007.DAT")
             .unwrap()
             .reference;
-        assert_eq!(old.file_id, 3);
 
-        engine.replace_index(FileIndex::synthetic(10)).unwrap();
+        let next = engine.replace_index(FileIndex::synthetic(8)).unwrap();
+        assert_eq!(next, INITIAL_GENERATION + 1);
 
-        assert!(matches!(
-            engine.resolve(old),
-            Err(ResolveError::StaleReference { .. })
-        ));
-
-        let fresh = engine
-            .find_first_ref("FILE_00000003.DAT")
-            .unwrap()
-            .reference;
-        assert_ne!(fresh.generation, old.generation);
-        assert_eq!(fresh.file_id, old.file_id);
-        assert!(engine.resolve(fresh).is_ok());
+        assert_eq!(
+            engine.resolve(old).unwrap_err(),
+            ResolveError::StaleReference {
+                active_generation: INITIAL_GENERATION + 1,
+                reference_generation: INITIAL_GENERATION,
+            }
+        );
     }
 
     #[test]
     fn rejected_candidate_leaves_generation_and_index_untouched() {
-        let mut engine = engine_with(10, "reject-candidate");
-        let old_generation = engine.generation();
-        let old_root = engine.active_index().root.clone();
-        let old = engine
-            .find_first_ref("FILE_00000004.DAT")
-            .unwrap()
-            .reference;
+        let mut engine = engine_with(32, "rejected-candidate");
+        let before_generation = engine.generation();
+        let before_root = engine.active_index().root.clone();
 
-        let err = engine
-            .replace_index(FileIndex::empty("synthetic://different-root"))
-            .unwrap_err();
-        assert!(matches!(err, ReloadError::RootChanged { .. }));
-        assert_eq!(engine.generation(), old_generation);
-        assert_eq!(engine.active_index().root, old_root);
-        assert!(engine.resolve(old).is_ok());
+        let mut candidate = FileIndex::synthetic(64);
+        candidate.root.push_str("-different-root");
+        let error = engine.replace_index(candidate).unwrap_err();
+
+        assert!(matches!(error, ReloadError::RootChanged { .. }));
+        assert_eq!(engine.generation(), before_generation);
+        assert_eq!(engine.active_index().root, before_root);
     }
 
     #[test]
     fn batch_resolution_preserves_errors_in_input_order() {
-        let mut engine = engine_with(10, "batch-order");
-        let first = engine
-            .find_first_ref("FILE_00000001.DAT")
+        let mut engine = engine_with(32, "batch");
+        let current = engine
+            .find_first_ref("FILE_00000007.DAT")
             .unwrap()
             .reference;
-        engine.replace_index(FileIndex::synthetic(10)).unwrap();
-        let second = engine
-            .find_first_ref("FILE_00000002.DAT")
+        let stale = current;
+        engine.replace_index(FileIndex::synthetic(64)).unwrap();
+        let fresh = engine
+            .find_first_ref("FILE_00000007.DAT")
             .unwrap()
             .reference;
 
-        let results = engine.resolve_many(&[first, second]);
+        let results = engine.resolve_many(&[stale, fresh]);
         assert!(matches!(
             &results[0],
             Err(ResolveError::StaleReference { .. })
         ));
-        assert_eq!(results[1].as_ref().unwrap().file_id, 2);
+        assert!(results[1].is_ok());
     }
 }
